@@ -1103,6 +1103,12 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
             throw std::runtime_error("ERROR: Could not create a socket");
         }
 
+        int flag = 1;
+        if (-1 == setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag))) {  
+            fprintf(stderr, "main: setsockopt failed.\n");
+            exit(1);
+        }
+    
         struct sockaddr_in server; 
         server.sin_family = AF_INET; 
         server.sin_port = htons(port); 
