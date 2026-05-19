@@ -169,18 +169,18 @@ cThread::cThread(int32_t vfid, pid_t hpid, uint32_t device, std::function<void(i
 
         uint32_t ibv_ip_addr = (uint32_t) tmp[0];
         qpair->local.ip_addr = ibv_ip_addr;
-        qpair->local.uintToGid(0, ibv_ip_addr);
-        qpair->local.uintToGid(8, ibv_ip_addr);
-        qpair->local.uintToGid(16, ibv_ip_addr);
+        qpair->local.uintToGid(0, 0);
+        qpair->local.uintToGid(8, 0);
+        qpair->local.uintToGid(16, 0xffff);
         qpair->local.uintToGid(24, ibv_ip_addr);
 
         // QPN is obtained from the vfid and ctid 
-        qpair->local.qpn = ((vfid & N_REG_MASK) << PID_BITS) | (ctid & PID_MASK); 
+        qpair->local.qpn = ((vfid & N_REG_MASK) << PID_BITS) | (ctid & PID_MASK);
         if (qpair->local.qpn == -1) {
             throw std::runtime_error("ERROR: Coyote PID incorrect, vfid: " + std::to_string(vfid));
         }
         qpair->local.psn = distr(rand_gen) & 0xFFFFFF;      // Generate a random PSN to start with on the local side 
-        qpair->local.rkey = 0;                              // Local rkey is hard-coded to 0 
+        qpair->local.rkey = 0;                              // Local rkey is hard-coded to 0; TODO: Generate a random RKEY
 
         DBG2("cThread: RDMA is enabled, created the local QP with QPN " << qpair->local.qpn << ", local PSN " << qpair->local.psn << ", and local rkey " << qpair->local.rkey);
     }
@@ -1026,7 +1026,7 @@ void cThread::connSync(bool client) {
     }
 }
 
-void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address) {
+void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address, int binary) {
     // Served address provided, so this node is the client
     if (server_address) {
         DBG3("cThread: initRDMA called from client side with server address " << server_address);
@@ -1069,17 +1069,32 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
         // Allocate memory for RDMA operations
         void *mem = getMem({CoyoteAllocType::HPF, buffer_size, true});
         
-        // Send the memory address to the server
-        if (write(connfd, &(qpair->local), sizeof(ibvQ)) != sizeof(ibvQ)) {
-            throw std::runtime_error("ERROR: Failed to send queue to server");
-        }
+        // Perform metadata exchage
+        if (binary) {
+            // Send the memory address to the server
+            if (write(connfd, &(qpair->local), sizeof(ibvQ)) != sizeof(ibvQ)) {
+                throw std::runtime_error("ERROR: Failed to send queue to server");
+            }
 
-        // Read server's memory address
-        char recv_buff[RECV_BUFF_SIZE];
-        if (read(connfd, recv_buff, sizeof(ibvQ)) != sizeof(ibvQ)) {
-            throw std::runtime_error("ERROR: Failed to read queue from server");
+            // Read server's memory address
+            char recv_buff[RECV_BUFF_SIZE];
+            if (read(connfd, recv_buff, sizeof(ibvQ)) != sizeof(ibvQ)) {
+                throw std::runtime_error("ERROR: Failed to read queue from server");
+            }
+            memcpy(&(qpair->remote), recv_buff, sizeof(ibvQ));
+        } else {
+            // Send the memory address to the server
+            if (write(connfd, qpair->local.binToString(), RECV_STRING_BUFF_SIZE) != RECV_STRING_BUFF_SIZE) {
+                throw std::runtime_error("ERROR: Failed to send queue to server (string metadata)");
+            }
+
+            // Read server's memory address
+            char recv_buff[RECV_STRING_BUFF_SIZE];
+            if (read(connfd, recv_buff, RECV_STRING_BUFF_SIZE) != RECV_STRING_BUFF_SIZE) {
+                throw std::runtime_error("ERROR: Failed to read queue from server (string metadata)");
+            }
+            qpair->remote.stringToBin(recv_buff);
         }
-        memcpy(&(qpair->remote), recv_buff, sizeof(ibvQ));
 
         // Write necessary information to the hardware registers
         writeQpContext(port);
@@ -1090,6 +1105,8 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
         qpair->local.print("Local: ");
         qpair->remote.print("Remote: ");
         std::cout << "Client registered" << std::endl;
+        qpair->local.printBin("Local Bin");
+        qpair->remote.printBin("Remote Bin");
 
         return mem;
     
@@ -1108,7 +1125,7 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
             fprintf(stderr, "main: setsockopt failed.\n");
             exit(1);
         }
-    
+
         struct sockaddr_in server; 
         server.sin_family = AF_INET; 
         server.sin_port = htons(port); 
@@ -1128,34 +1145,69 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
 
         if ((connfd = ::accept(sockfd, NULL, 0)) != -1) {
             is_connected = true;
-            uint32_t n; 
-
-            // Allocate a receive buffer for data sent through the out-of-band connection
-            char recv_buf[RECV_BUFF_SIZE]; 
-            memset(recv_buf, 0, RECV_BUFF_SIZE); 
-            
-            // Read QP from the client
-            if ((n = ::read(connfd, recv_buf, sizeof(ibvQ))) == sizeof(ibvQ)) {
-                memcpy(&(qpair->remote), recv_buf, sizeof(ibvQ));
-            } else {
-                ::close(connfd);
-                is_connected = false;
-                throw std::runtime_error("ERROR: Failed to read queue from client");
-            }
+            uint32_t n;
 
             void *mem = getMem({CoyoteAllocType::HPF, buffer_size, true});
 
-            // Send QP to the client
-            if (::write(connfd, &(qpair->local), sizeof(ibvQ)) != sizeof(ibvQ))  {
-                ::close(connfd);
-                is_connected = false;
-                throw std::runtime_error("ERROR: Failed to send queue to client");
+            // Perform metadata exchage
+            if (binary) {
+                // Allocate a receive buffer for data sent through the out-of-band connection
+                char recv_buf[RECV_BUFF_SIZE];
+                memset(recv_buf, 0, RECV_BUFF_SIZE);
+
+                // Read QP from the client
+                if ((n = ::read(connfd, recv_buf, sizeof(ibvQ))) == sizeof(ibvQ)) {
+                    memcpy(&(qpair->remote), recv_buf, sizeof(ibvQ));
+                } else {
+                    ::close(connfd);
+                    is_connected = false;
+                    throw std::runtime_error("ERROR: Failed to read queue from client");
+                }
+
+                // Send QP to the client
+                if (::write(connfd, &(qpair->local), sizeof(ibvQ)) != sizeof(ibvQ))  {
+                    ::close(connfd);
+                    is_connected = false;
+                    throw std::runtime_error("ERROR: Failed to send queue to client");
+                }
+            } else {
+                printf("correct neighbourhood\n");
+                // Allocate a receive buffer for data sent through the out-of-band connection
+                char recv_buf[RECV_STRING_BUFF_SIZE];
+                memset(recv_buf, 0, RECV_STRING_BUFF_SIZE);
+
+                printf("prepared buffer\n");
+                // Read QP from the client
+                if ((n = ::read(connfd, recv_buf, RECV_STRING_BUFF_SIZE)) == RECV_STRING_BUFF_SIZE) {
+                    printf("received remote metadata\n");
+                    qpair->remote.stringToBin(recv_buf);
+                    printf("parsed remote metadata\n");
+                } else {
+                    ::close(connfd);
+                    is_connected = false;
+                    throw std::runtime_error("ERROR: Failed to read queue from client (string metadata)");
+                }
+
+                // Send QP to the client
+                if (::write(connfd, qpair->local.binToString(), RECV_STRING_BUFF_SIZE) != RECV_STRING_BUFF_SIZE)  {
+                    ::close(connfd);
+                    is_connected = false;
+                    throw std::runtime_error("ERROR: Failed to send queue to client (string metadata)");
+                }
             }
 
             //  Write necessary information to the hardware registers
-            writeQpContext(port); 
-            doArpLookup(qpair->remote.ip_addr); 
-            
+            writeQpContext(port);
+            doArpLookup(qpair->remote.ip_addr);
+
+            // Debug info
+            std::cout << "Queue pair: " << std::endl;
+            qpair->local.print("Local: ");
+            qpair->remote.print("Remote: ");
+            std::cout << "Client registered" << std::endl;
+            qpair->local.printBin("Local Bin");
+            qpair->remote.printBin("Remote Bin");
+
             std::cout << "Server registered" << std::endl;
             return mem;
 

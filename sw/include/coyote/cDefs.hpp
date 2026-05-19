@@ -27,13 +27,13 @@
 #ifndef _COYOTE_CDEFS_HPP_
 #define _COYOTE_CDEFS_HPP_
 
-#include <chrono> 
-#include <cstring> 
+#include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <iomanip>
 #include <netdb.h>
-#include <iostream>  
-#include <sys/ioctl.h> 
+#include <iostream>
+#include <sys/ioctl.h>
 
 using namespace std::chrono_literals;
 
@@ -115,7 +115,7 @@ namespace coyote {
 // Retrieve the PR config (set before hardware synthesis)
 #define IOCTL_PR_CNFG                       _IOR('P', 5, unsigned long)
 
-// Retrieve PR and writeback statistics (no. of read/write requests, completions, data beats from/to the XDMA/QDMA) 
+// Retrieve PR and writeback statistics (no. of read/write requests, completions, data beats from/to the XDMA/QDMA)
 #define IOCTL_PR_WB_STATS                   _IOR('P', 6, unsigned long)
 
 #define BUFF_NEEDS_EXP_SYNC_RET_CODE 99
@@ -145,7 +145,7 @@ enum class CnfgAvxRegs : uint32_t {
     STAT_DMA_REG = 64
 };
 
-/// @brief Non-AVX config registers; used for legacy systems and Enzian 
+/// @brief Non-AVX config registers; used for legacy systems and Enzian
 enum class CnfgLegRegs : uint32_t {
     CTRL_REG = 0,
     VADDR_RD_REG = 1,
@@ -161,8 +161,8 @@ enum class CnfgLegRegs : uint32_t {
     STAT_REG_3 = 11,
     STAT_REG_4 = 12,
     STAT_REG_5 = 13,
-    STAT_REG_6 = 14, 
-    STAT_REG_7 = 15, 
+    STAT_REG_6 = 14,
+    STAT_REG_7 = 15,
     WBACK_REG_0 = 16,
     WBACK_REG_1 = 17,
     WBACK_REG_2 = 18,
@@ -200,7 +200,7 @@ enum class CnfgLegRegs : uint32_t {
  * Therefore, there are few comments, but mostly for constants that are not obvious
  */
 
-// Masks, shifts & offsets for ensuring the correct value is written to/read from memory mapped registers 
+// Masks, shifts & offsets for ensuring the correct value is written to/read from memory mapped registers
 #define CTRL_OPCODE_OFFS                    (0)
 #define CTRL_STRM_OFFS                      (8)
 #define CTRL_PID_OFFS                       (10)
@@ -259,7 +259,7 @@ constexpr int const N_CTID_MAX = 64;
  * Size and offset of memory mapped regions (vFPGA control regions):
  * vFPGA CSRs; accessed through getCSR and setCSR
  * vFPGA (AVX) config region; implemented in cnfg_slave(_avx).sv
- * Writeback region for checking completion counters 
+ * Writeback region for checking completion counters
  */
 constexpr unsigned long const CTRL_REGION_SIZE = 64 * 1024;
 constexpr unsigned long const CNFG_REGION_SIZE = 64 * 1024;
@@ -297,6 +297,7 @@ constexpr unsigned long const DEF_PORT = 18488;
 
 // Background daemons
 constexpr unsigned long const RECV_BUFF_SIZE = 1024;
+constexpr unsigned long const RECV_STRING_BUFF_SIZE = 82; // length of string buffer necessary for exchanging queue metadata
 constexpr unsigned long const DAEMON_CLEAN_CONNS_SLEEP = 500; // us
 constexpr unsigned long const DAEMON_ACCEPT_CONN_SLEEP = 50; // us
 constexpr unsigned long const DAEMON_PROCESS_REQUESTS_SLEEP = 10; // us
@@ -304,20 +305,20 @@ constexpr unsigned long const MAX_NUM_CLIENTS = 64;
 constexpr unsigned long const DEF_OP_CLOSE_CONN = 0;
 constexpr unsigned long const DEF_OP_SUBMIT_TASK = 1;
 constexpr unsigned long const SLEEP_INTERVAL_CLIENT_CONN_MANAGER = 500; // us
-static constexpr struct timeval SERVER_RECV_TIMEOUT = {.tv_sec = 0, .tv_usec = 5000}; 
-static constexpr struct timeval CLIENT_RECV_TIMEOUT = {.tv_sec = 0, .tv_usec = 500}; 
+static constexpr struct timeval SERVER_RECV_TIMEOUT = {.tv_sec = 0, .tv_usec = 5000};
+static constexpr struct timeval CLIENT_RECV_TIMEOUT = {.tv_sec = 0, .tv_usec = 500};
 
 /// @brief RDMA Queue (QP) --- keeps all the necessary information of a single node in RDMA connections
 struct ibvQ {
     /// Node IP address
     uint32_t ip_addr;
 
-    /// Queue Pair Number 
-    uint32_t qpn; 
+    /// Queue Pair Number
+    uint32_t qpn;
 
     /// Packet Serial Number
     uint32_t psn;
-    
+
     /// Memory rkey
     uint32_t rkey;
 
@@ -333,7 +334,7 @@ struct ibvQ {
      */
     char gid[33] = { 0 };
 
-    /// Converter GID to integer 
+    /// Converter GID to integer
     uint32_t gidToUint(int idx) {
         if(idx > 24) {
             std::cerr << "Invalid index for gidToUint" << std::endl;
@@ -347,7 +348,7 @@ struct ibvQ {
         return ntohl(v32);
     }
 
-    /// Converter integer to GID 
+    /// Converter integer to GID
     void uintToGid(int idx, uint32_t ip_addr) {
         std::ostringstream gidStream;
         gidStream << std::setfill('0') << std::setw(8) << std::hex << ip_addr;
@@ -360,6 +361,30 @@ struct ibvQ {
             "%s: QPN 0x%06x, PSN 0x%06x, VADDR %016lx, SIZE %08x, IP 0x%08x\n",
             name, qpn, psn, (uint64_t)vaddr, size, ip_addr
         );
+    }
+
+    void printBin(const char *name) {
+        printf("%s: ", name);
+        for (size_t i = 0; i < sizeof(struct ibvQ); ++i) {
+            printf("%02x ", (unsigned char)(*((unsigned char *)this + i)));
+        }
+        printf("\n");
+    }
+
+    /// Extract queue metadata from metadata string
+    void stringToBin(const char *metadata) {
+        vaddr = (uint64_t *)malloc(sizeof(uint64_t));
+        sscanf(metadata, "%06x:%06x:%08x:%016p:%08x:%32s", &qpn, &psn, &rkey, &vaddr, &size, gid);
+        ip_addr = htonl(gidToUint(24));
+
+    }
+
+    /// Create metadata string from queue metadata
+    char* binToString() {
+        char *metadata = new char[RECV_STRING_BUFF_SIZE];
+        memset(metadata, 0, RECV_STRING_BUFF_SIZE);
+        snprintf(metadata, RECV_STRING_BUFF_SIZE, "%06x:%06x:%08x:%016lx:%08x:%32s", qpn, psn, rkey, (uint64_t)((uint64_t *)vaddr), size, gid);
+        return metadata;
     }
 };
 
@@ -418,7 +443,7 @@ typedef struct __attribute__((packed)) {
 
     /// Set to true if either RDMA or TCP is enabled
     bool en_net = { false };
-    
+
     /// Number of host DMA channels (typically, 3: streming data, sync/offload and writeback)
     int32_t n_hdma_chan = { 0 };
 

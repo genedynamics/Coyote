@@ -345,7 +345,7 @@ protected:
 	 * @param port Port number to be used for the out-of-band connection
 	 * @param server_address Optional server address to connect to; if not provided, this cThread acts as the server
 	 */
-	void* initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address = nullptr);
+	void* initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address = nullptr, int binary = 1);
 	
 	/**
 	 * @brief Opposite of initRDMA; releases the the out-of-band connection which was used to exchange QP
