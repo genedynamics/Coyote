@@ -1193,7 +1193,7 @@ void cThread::connSync(bool client) {
     }
 }
 
-void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address, void* mem, int binary) {
+void* cThread::initRDMA(uint64_t buffer_size, uint16_t port, const char* server_address, void* mem, int binary) {
     // Served address provided, so this node is the client
     if (server_address) {
         DBG3("cThread: initRDMA called from client side with server address " << server_address);

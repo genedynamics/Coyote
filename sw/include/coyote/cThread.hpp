@@ -351,7 +351,7 @@ protected:
 	 * @param mem Optional pre-allocated staging buffer for RDMA operations; if provided (not nullptr),
 	 *            it is used directly and no buffer is allocated internally via getMem
 	 */
-	void* initRDMA(uint32_t buffer_size, uint16_t port, const char* server_address = nullptr, void* mem = nullptr, int binary = 1);
+	void* initRDMA(uint64_t buffer_size, uint16_t port, const char* server_address = nullptr, void* mem = nullptr, int binary = 1);
 	
 	/**
 	 * @brief Opposite of initRDMA; releases the the out-of-band connection which was used to exchange QP
