@@ -1355,7 +1355,7 @@ void* cThread::initRDMA(uint32_t buffer_size, uint16_t port, const char* server_
             std::cout << "Queue pair: " << std::endl;
             qpair->local.print("Local: ");
             qpair->remote.print("Remote: ");
-            std::cout << "Client registered" << std::endl;
+            std::cout << "Incoming client registered" << std::endl;
             qpair->local.printBin("Local Bin");
             qpair->remote.printBin("Remote Bin");
 
